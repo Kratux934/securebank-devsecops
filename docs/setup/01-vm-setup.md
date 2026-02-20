@@ -90,6 +90,6 @@ Beaucoup plus confortable et proche d'un environnement réel.
 ## Statut
 
 - [x] vm-gitlab — 192.168.157.10 ✅
-- [ ] vm-security — 192.168.157.20
-- [ ] vm-vault — 192.168.157.30
-- [ ] vm-k3s — 192.168.157.40
+- [x] vm-security — 192.168.157.20 ✅
+- [x] vm-vault — 192.168.157.30 ✅
+- [x] vm-k3s — 192.168.157.40 ✅
