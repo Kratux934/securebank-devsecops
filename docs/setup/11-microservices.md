@@ -94,7 +94,7 @@ bcrypt génère un hash irréversible avec sel aléatoire.
 ```python
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "changeme-in-production")
 ```
-La clé ne est jamais hardcodée dans le code.
+La clé n'ai jamais hardcodée dans le code.
 En production elle viendra de Vault.
 
 ### Contrôle d'accès
