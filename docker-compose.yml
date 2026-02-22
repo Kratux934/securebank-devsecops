@@ -1,0 +1,34 @@
+services:
+  auth-service:
+    build: ./app/auth-service
+    container_name: auth-service
+    ports:
+      - "8001:8000"
+    environment:
+      - JWT_SECRET_KEY=changeme-in-development
+    networks:
+      - securebank-network
+
+  account-service:
+    build: ./app/account-service
+    container_name: account-service
+    ports:
+      - "8002:8000"
+    environment:
+      - JWT_SECRET_KEY=changeme-in-development
+    networks:
+      - securebank-network
+
+  transaction-service:
+    build: ./app/transaction-service
+    container_name: transaction-service
+    ports:
+      - "8003:8000"
+    environment:
+      - JWT_SECRET_KEY=changeme-in-development
+    networks:
+      - securebank-network
+
+networks:
+  securebank-network:
+    driver: bridge
