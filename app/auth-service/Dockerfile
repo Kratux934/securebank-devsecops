@@ -21,6 +21,8 @@ COPY --from=builder /root/.local /home/appuser/.local
 # Copier le code
 COPY --chown=appuser:appgroup main.py .
 
+ENV PATH=/home/appuser/.local/bin:$PATH
+
 # Utiliser l'utilisateur non-root
 USER appuser
 
