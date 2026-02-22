@@ -18,6 +18,8 @@ COPY --from=builder /root/.local /home/appuser/.local
 
 COPY --chown=appuser:appgroup main.py .
 
+ENV PATH=/home/appuser/.local/bin:$PATH
+
 USER appuser
 
 EXPOSE 8000
