@@ -6,6 +6,8 @@ stages:
 variables:
   HARBOR_URL: "192.168.157.20"
   HARBOR_PROJECT: "securebank"
+  DOCKER_HOST: unix:///var/run/docker.sock
+  DOCKER_TLS_CERTDIR: ""
 
 test-auth:
   stage: test
@@ -14,7 +16,6 @@ test-auth:
     - pip install -r app/auth-service/requirements.txt
   script:
     - cd app/auth-service
-    - pip install pytest httpx
     - PYTHONPATH=. pytest tests/ -v
 
 test-account:
@@ -39,22 +40,62 @@ build-auth:
   stage: build
   image: docker:24.0
   services:
-    - docker:24.0-dind
+    - name: docker:24.0-dind
+      alias: docker
   script:
+    - sleep 5
     - docker build -t $HARBOR_URL/$HARBOR_PROJECT/auth-service:$CI_COMMIT_SHORT_SHA app/auth-service/
 
 build-account:
   stage: build
   image: docker:24.0
   services:
-    - docker:24.0-dind
+    - name: docker:24.0-dind
+      alias: docker
   script:
+    - sleep 5
     - docker build -t $HARBOR_URL/$HARBOR_PROJECT/account-service:$CI_COMMIT_SHORT_SHA app/account-service/
 
 build-transaction:
   stage: build
   image: docker:24.0
   services:
-    - docker:24.0-dind
+    - name: docker:24.0-dind
+      alias: docker
   script:
+    - sleep 5
     - docker build -t $HARBOR_URL/$HARBOR_PROJECT/transaction-service:$CI_COMMIT_SHORT_SHA app/transaction-service/
+
+push-auth:
+  stage: push
+  image: docker:27.0
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  script:
+    - sleep 5
+    - docker build -t $HARBOR_URL/$HARBOR_PROJECT/auth-service:$CI_COMMIT_SHORT_SHA app/auth-service/
+    - docker login $HARBOR_URL -u $HARBOR_USERNAME -p $HARBOR_PASSWORD
+    - docker push $HARBOR_URL/$HARBOR_PROJECT/auth-service:$CI_COMMIT_SHORT_SHA
+
+
+push-account:
+  stage: push
+  image: docker:27.0
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  script:
+    - sleep 5
+    - docker build -t $HARBOR_URL/$HARBOR_PROJECT/account-service:$CI_COMMIT_SHORT_SHA app/account-service/
+    - docker login $HARBOR_URL -u $HARBOR_USERNAME -p $HARBOR_PASSWORD 
+    - docker push $HARBOR_URL/$HARBOR_PROJECT/account-service:$CI_COMMIT_SHORT_SHA
+
+push-transaction:
+  stage: push
+  image: docker:27.0
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  script:
+    - sleep 5
+    - docker build -t $HARBOR_URL/$HARBOR_PROJECT/transaction-service:$CI_COMMIT_SHORT_SHA app/transaction-service/
+    - docker login $HARBOR_URL -u $HARBOR_USERNAME -p $HARBOR_PASSWORD 
+    - docker push $HARBOR_URL/$HARBOR_PROJECT/transaction-service:$CI_COMMIT_SHORT_SHA
