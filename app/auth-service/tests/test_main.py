@@ -11,7 +11,7 @@ def test_health():
 def test_register():
     response = client.post("/register", json={
         "username": "testuser",
-        "password": "testpassword123",
+        "password": "Test1234!",
         "email": "test@securebank.com"
     })
     assert response.status_code == 201
@@ -20,12 +20,12 @@ def test_register():
 def test_register_duplicate():
     client.post("/register", json={
         "username": "dupuser",
-        "password": "testpassword123",
+        "password": "Test1234!",
         "email": "dup@securebank.com"
     })
     response = client.post("/register", json={
         "username": "dupuser",
-        "password": "testpassword123",
+        "password": "Test1234!",
         "email": "dup@securebank.com"
     })
     assert response.status_code == 400
@@ -33,12 +33,12 @@ def test_register_duplicate():
 def test_login():
     client.post("/register", json={
         "username": "loginuser",
-        "password": "testpassword123",
+        "password": "Test1234!",
         "email": "login@securebank.com"
     })
     response = client.post("/login", json={
         "username": "loginuser",
-        "password": "testpassword123"
+        "password": "Test1234!"
     })
     assert response.status_code == 200
     assert "access_token" in response.json()
@@ -53,12 +53,12 @@ def test_login_wrong_password():
 def test_verify_token():
     client.post("/register", json={
         "username": "verifyuser",
-        "password": "testpassword123",
+        "password": "Test1234!",
         "email": "verify@securebank.com"
     })
     login_response = client.post("/login", json={
         "username": "verifyuser",
-        "password": "testpassword123"
+        "password": "Test1234!"
     })
     token = login_response.json()["access_token"]
     response = client.get("/verify", headers={
