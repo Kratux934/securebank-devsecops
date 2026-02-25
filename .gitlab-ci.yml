@@ -1,0 +1,60 @@
+stages:
+  - test
+  - build
+  - push
+
+variables:
+  HARBOR_URL: "192.168.157.20"
+  HARBOR_PROJECT: "securebank"
+
+test-auth:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - pip install -r app/auth-service/requirements.txt
+  script:
+    - cd app/auth-service
+    - pip install pytest httpx
+    - PYTHONPATH=. pytest tests/ -v
+
+test-account:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - pip install -r app/account-service/requirements.txt
+  script:
+    - cd app/account-service
+    - PYTHONPATH=. pytest tests/ -v
+
+test-transaction:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - pip install -r app/transaction-service/requirements.txt
+  script:
+    - cd app/transaction-service
+    - PYTHONPATH=. pytest tests/ -v
+
+build-auth:
+  stage: build
+  image: docker:24.0
+  services:
+    - docker:24.0-dind
+  script:
+    - docker build -t $HARBOR_URL/$HARBOR_PROJECT/auth-service:$CI_COMMIT_SHORT_SHA app/auth-service/
+
+build-account:
+  stage: build
+  image: docker:24.0
+  services:
+    - docker:24.0-dind
+  script:
+    - docker build -t $HARBOR_URL/$HARBOR_PROJECT/account-service:$CI_COMMIT_SHORT_SHA app/account-service/
+
+build-transaction:
+  stage: build
+  image: docker:24.0
+  services:
+    - docker:24.0-dind
+  script:
+    - docker build -t $HARBOR_URL/$HARBOR_PROJECT/transaction-service:$CI_COMMIT_SHORT_SHA app/transaction-service/
