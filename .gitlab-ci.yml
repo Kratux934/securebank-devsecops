@@ -1,7 +1,10 @@
 stages:
   - test
   - build
+  - scan
   - push
+  - sbom
+  - dtrack
 
 variables:
   HARBOR_URL: "192.168.157.20"
@@ -66,6 +69,39 @@ build-transaction:
     - sleep 5
     - docker build -t $HARBOR_URL/$HARBOR_PROJECT/transaction-service:$CI_COMMIT_SHORT_SHA app/transaction-service/
 
+
+scan-auth:
+  stage: scan
+  image: docker:27.0
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  script:
+    - docker build -t $HARBOR_URL/$HARBOR_PROJECT/auth-service:$CI_COMMIT_SHORT_SHA app/auth-service/
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --exit-code 0 --severity HIGH,CRITICAL $HARBOR_URL/$HARBOR_PROJECT/auth-service:$CI_COMMIT_SHORT_SHA
+  allow_failure: true
+
+scan-account:
+  stage: scan
+  image: docker:27.0
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  script:
+    - docker build -t $HARBOR_URL/$HARBOR_PROJECT/account-service:$CI_COMMIT_SHORT_SHA app/account-service/
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --exit-code 0 --severity HIGH,CRITICAL $HARBOR_URL/$HARBOR_PROJECT/account-service:$CI_COMMIT_SHORT_SHA
+  allow_failure: true
+
+scan-transaction:
+  stage: scan
+  image: docker:27.0
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  script:
+    - docker build -t $HARBOR_URL/$HARBOR_PROJECT/transaction-service:$CI_COMMIT_SHORT_SHA app/transaction-service/
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --exit-code 0 --severity HIGH,CRITICAL $HARBOR_URL/$HARBOR_PROJECT/transaction-service:$CI_COMMIT_SHORT_SHA
+  allow_failure: true
+
+
+
 push-auth:
   stage: push
   image: docker:27.0
@@ -95,7 +131,157 @@ push-transaction:
   variables:
     DOCKER_HOST: "unix:///var/run/docker.sock"
   script:
-    - sleep 5
+    - sleep 4
     - docker build -t $HARBOR_URL/$HARBOR_PROJECT/transaction-service:$CI_COMMIT_SHORT_SHA app/transaction-service/
     - docker login $HARBOR_URL -u $HARBOR_USERNAME -p $HARBOR_PASSWORD 
     - docker push $HARBOR_URL/$HARBOR_PROJECT/transaction-service:$CI_COMMIT_SHORT_SHA
+
+sbom-auth:
+  stage: sbom
+  image: docker:27.0
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  script:
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/syft:latest $HARBOR_URL/$HARBOR_PROJECT/auth-service:$CI_COMMIT_SHORT_SHA -o cyclonedx-json > auth-service-sbom.json
+    - cat auth-service-sbom.json
+  artifacts:
+    paths:
+      - auth-service-sbom.json
+    expire_in: 30 days
+  allow_failure: true
+
+sbom-account:
+  stage: sbom
+  image: docker:27.0
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  script:
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/syft:latest $HARBOR_URL/$HARBOR_PROJECT/account-service:$CI_COMMIT_SHORT_SHA -o cyclonedx-json > account-service-sbom.json
+    - cat account-service-sbom.json
+  artifacts:
+    paths:
+      - account-service-sbom.json
+    expire_in: 30 days
+  allow_failure: true
+
+sbom-transaction:
+  stage: sbom
+  image: docker:27.0
+  variables:
+    DOCKER_HOST: "unix:///var/run/docker.sock"
+  script:
+    - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock anchore/syft:latest $HARBOR_URL/$HARBOR_PROJECT/transaction-service:$CI_COMMIT_SHORT_SHA -o cyclonedx-json > transaction-service-sbom.json
+    - cat transaction-service-sbom.json
+  artifacts:
+    paths:
+      - transaction-service-sbom.json
+    expire_in: 30 days
+  allow_failure: true
+
+dtrack-auth:
+  stage: dtrack
+  image: python:3.11-slim
+  script:
+    - pip install requests
+    - |
+      python3 << EOF
+      import requests, json, base64
+
+      with open("auth-service-sbom.json", "r") as f:
+          sbom_content = f.read()
+
+      encoded = base64.b64encode(sbom_content.encode()).decode()
+
+      payload = {
+          "projectName": "auth-service",
+          "projectVersion": "$CI_COMMIT_SHORT_SHA",
+          "autoCreate": True,
+          "bom": encoded
+      }
+
+      response = requests.put(
+          "http://192.168.157.20:8080/api/v1/bom",
+          headers={
+              "X-Api-Key": "$DTRACK_API_KEY",
+              "Content-Type": "application/json"
+          },
+          json=payload
+      )
+      print("Status:", response.status_code)
+      print("Response:", response.text)
+      EOF
+  dependencies:
+    - sbom-auth
+  allow_failure: true
+
+dtrack-account:
+  stage: dtrack
+  image: python:3.11-slim
+  script:
+    - pip install requests
+    - |
+      python3 << EOF
+      import requests, json, base64
+
+      with open("account-service-sbom.json", "r") as f:
+          sbom_content = f.read()
+
+      encoded = base64.b64encode(sbom_content.encode()).decode()
+
+      payload = {
+          "projectName": "account-service",
+          "projectVersion": "$CI_COMMIT_SHORT_SHA",
+          "autoCreate": True,
+          "bom": encoded
+      }
+
+      response = requests.put(
+          "http://192.168.157.20:8080/api/v1/bom",
+          headers={
+              "X-Api-Key": "$DTRACK_API_KEY",
+              "Content-Type": "application/json"
+          },
+          json=payload
+      )
+      print("Status:", response.status_code)
+      print("Response:", response.text)
+      EOF
+  dependencies:
+    - sbom-account
+  allow_failure: true
+
+dtrack-transaction:
+  stage: dtrack
+  image: python:3.11-slim
+  script:
+    - pip install requests
+    - |
+      python3 << EOF
+      import requests, json, base64
+
+      with open("transaction-service-sbom.json", "r") as f:
+          sbom_content = f.read()
+
+      encoded = base64.b64encode(sbom_content.encode()).decode()
+
+      payload = {
+          "projectName": "transaction-service",
+          "projectVersion": "$CI_COMMIT_SHORT_SHA",
+          "autoCreate": True,
+          "bom": encoded
+      }
+
+      response = requests.put(
+          "http://192.168.157.20:8080/api/v1/bom",
+          headers={
+              "X-Api-Key": "$DTRACK_API_KEY",
+              "Content-Type": "application/json"
+          },
+          json=payload
+      )
+      print("Status:", response.status_code)
+      print("Response:", response.text)
+      EOF
+  dependencies:
+    - sbom-transaction
+  allow_failure: true
