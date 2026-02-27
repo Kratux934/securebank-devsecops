@@ -35,6 +35,10 @@ base de données de vulnérabilités CVE. Il identifie
 précisément quelle dépendance a un problème et quelle
 version corriger.
 
+Trivy et Syft sont utilisés via `docker run --rm` —
+ils tournent dans des containers éphémères détruits
+après exécution. Rien n'est installé sur vm-gitlab.
+
 ### Trivy dans le pipeline vs Trivy dans Harbor
 
 **Trivy dans Harbor** — scan automatique à chaque push,
@@ -76,6 +80,10 @@ Trivy trouve des problèmes. À enlever en Phase 6.
 éphémère détruit après exécution. Rien n'est installé
 sur vm-gitlab.
 
+**`-v /var/run/docker.sock:/var/run/docker.sock`** — monte
+le socket Docker pour que Trivy puisse accéder aux images
+locales.
+
 ### Lire le rapport Trivy
 
 ```
@@ -89,11 +97,20 @@ Report Summary
 └─────────────────────────────┴────────────┴─────────────────┴─────────┘
 ```
 
-**Target** — l'élément précis scanné (OS ou package Python).
+**Target** — l'élément précis scanné. Soit l'OS entier,
+soit un package Python avec son fichier METADATA.
+
 **Type** — catégorie : `debian` pour l'OS, `python-pkg`
-pour les packages pip.
+pour les packages pip installés via pip.
+
 **Vulnerabilities** — nombre de CVE trouvées.
-**Secrets** — Trivy cherche aussi les secrets hardcodés.
+`0` = propre, `2` = 2 vulnérabilités.
+
+**Secrets** — Trivy cherche aussi les secrets hardcodés
+(clés API, mots de passe). `-` = pas scanné.
+
+C'est l'inventaire complet de tous les composants de
+l'image avec leur statut de sécurité.
 
 ### Vulnérabilités trouvées sur nos images
 
@@ -118,16 +135,33 @@ pour les packages pip.
 
 **Faux positif** — l'outil signale une vulnérabilité
 qui n'est pas applicable dans notre contexte.
+La règle : est-ce que MON CODE utilise la fonctionnalité
+vulnérable ?
 Exemple : CVE sur upload de fichiers multipart alors
-que notre service ne fait que du JSON.
+que notre service ne fait que du JSON → faux positif.
 
 **Vrai positif** — la vulnérabilité est réelle et
 notre code utilise la fonctionnalité vulnérable.
-Exemple : python-jose CRITICAL — on utilise JWT.
+Exemple : python-jose CRITICAL — on utilise JWT → vrai positif.
 
 **Risque accepté** — vulnérabilité réelle mais acceptée
 consciemment avec justification documentée.
 Exemple : libc-bin — pas de fix disponible, composant OS.
+
+Le processus en entreprise :
+```
+Trivy détecte une vulnérabilité
+        ↓
+Analyste examine :
+├── La fonctionnalité est-elle utilisée ?
+├── Le service est-il exposé ?
+└── Y a-t-il un fix disponible ?
+        ↓
+Décision :
+├── Vrai positif  → ouvrir un ticket de correction
+├── Faux positif  → documenter et ignorer
+└── Risque accepté → noter dans le registre des risques
+```
 
 ---
 
@@ -142,7 +176,8 @@ toutes les librairies Python, leurs versions exactes.
 Trivy scanne au moment du build — photo à un instant T.
 Une nouvelle CVE peut apparaître 6 mois après sur un
 package déjà en production. Le SBOM permet à OWASP DT
-de surveiller en continu.
+de surveiller en continu — dès qu'une nouvelle CVE
+apparaît sur un de tes packages, tu reçois une alerte.
 
 ### Format CycloneDX
 Standard industrie reconnu par OWASP DT, GitHub,
@@ -153,7 +188,7 @@ et leurs métadonnées.
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:...",
+  "serialNumber": "urn:uuid:7c970fad-...",
   "components": [
     {
       "name": "fastapi",
@@ -163,6 +198,9 @@ et leurs métadonnées.
   ]
 }
 ```
+
+Notre SBOM contient **2934 composants** — packages OS,
+librairies Python, binaires système.
 
 Le fichier est **minifié** (tout sur une ligne) — fait
 pour être lu par des machines, pas des humains.
@@ -186,10 +224,17 @@ sbom-auth:
 ```
 
 **`artifacts`** — GitLab sauvegarde le fichier SBOM 30 jours.
-Téléchargeable depuis l'interface GitLab.
+Téléchargeable depuis l'interface GitLab → job → Artifacts.
 
-**`anchore/syft:latest`** — comme Trivy, Syft tourne dans
-un container éphémère. Rien n'est installé sur vm-gitlab.
+**`cyclonedx-json`** — format standard reconnu par OWASP DT.
+
+**`anchore/syft:latest`** — Syft tourne dans un container
+éphémère. Rien n'est installé sur vm-gitlab.
+
+**Passage des artifacts entre jobs** — le fichier SBOM
+généré par Syft est récupéré par le job dtrack grâce
+à `dependencies`. Sans ça chaque job est isolé et ne
+voit pas les fichiers des autres jobs.
 
 ---
 
@@ -198,18 +243,37 @@ un container éphémère. Rien n'est installé sur vm-gitlab.
 ### C'est quoi OWASP DT ?
 Reçoit les SBOMs et surveille en continu. Dès qu'une
 nouvelle CVE apparaît sur un package de tes images,
-tu reçois une alerte automatique.
+tu reçois une alerte automatique — sans relancer le pipeline.
 
-### Configuration des permissions
+### Différence avec Trivy
+```
+Trivy    → meilleur détection CVE Python pip (temps réel)
+OWASP DT → meilleur surveillance continue OS + alertes auto
+```
+Les deux sont complémentaires — Trivy détecte au build,
+OWASP DT surveille en permanence après le déploiement.
 
-Le token API doit avoir ces permissions :
-- `PROJECT_CREATION_UPLOAD` ✅
-- `BOM_UPLOAD` ✅
-- `VIEW_PORTFOLIO` ✅
-- `VIEW_VULNERABILITY` ✅
+### Récupérer le token API
+
+OWASP DT → **Administration** → **Access Management**
+→ **Teams** → **Automation** → copier le token API.
+
+### Configuration des permissions du token
 
 **Administration** → **Access Management** → **Teams**
-→ **Automation** → ajouter les permissions.
+→ **Automation** → **Permissions** → ajouter :
+
+- `PROJECT_CREATION_UPLOAD` ✅ — crée le projet + upload BOM
+- `BOM_UPLOAD` ✅ — upload du SBOM
+- `VIEW_PORTFOLIO` ✅ — voir les projets
+- `VIEW_VULNERABILITY` ✅ — voir les vulnérabilités
+
+### Ajouter le token dans GitLab
+
+GitLab → projet → **Settings** → **CI/CD** → **Variables** :
+- Key : `DTRACK_API_KEY`
+- Value : ton token OWASP DT
+- Visibility : **Masked and hidden** ✅
 
 ### Job OWASP DT dans .gitlab-ci.yml
 
@@ -250,99 +314,149 @@ dtrack-auth:
   allow_failure: true
 ```
 
-**`dependencies: sbom-auth`** — récupère automatiquement
-l'artifact SBOM du job sbom-auth. Sans ça le fichier
-JSON n'est pas disponible dans ce job.
+**`dependencies: sbom-auth`** — GitLab télécharge
+automatiquement l'artifact SBOM du job sbom-auth dans
+le workspace de ce job. C'est le seul moyen de partager
+des fichiers entre jobs car chaque job tourne dans un
+container isolé.
 
 **`autoCreate: True`** — crée le projet dans OWASP DT
-automatiquement s'il n'existe pas.
+automatiquement s'il n'existe pas. On a 3 projets séparés :
+auth-service, account-service, transaction-service.
 
 **`base64`** — OWASP DT attend le SBOM encodé en base64.
 
 **`projectVersion: $CI_COMMIT_SHORT_SHA`** — chaque push
-crée une nouvelle version dans OWASP DT — traçabilité
-complète.
+crée une nouvelle version dans OWASP DT. Tu peux comparer
+les vulnérabilités entre versions.
 
-### Onglets OWASP DT et leur utilité
+### Onglets OWASP DT et leur utilité en entreprise
 
-**Audit Vulnerabilities** — triage des CVE :
+**Audit Vulnerabilities** — onglet principal. Triage des CVE :
 vrai positif → ticket de correction,
-faux positif → documenter et supprimer,
+faux positif → documenter et supprimer avec justification,
 risque accepté → noter avec date de révision.
+Filtrer par statut `New` pour voir uniquement les nouvelles.
 
 **Exploit Prediction** — priorise les CVE selon la
-probabilité d'exploitation active.
+probabilité d'exploitation active. Une CVE Medium avec
+exploit actif est plus urgente qu'une Critical sans exploit.
 
-**Policy Violation** — règles automatiques :
+**Policy Violation** — règles automatiques configurables :
 "aucune CVE Critical non corrigée depuis 30 jours".
 
-**Dependency Graph** — visualise les dépendances
-transitives.
+**Dependency Graph** — visualise les dépendances transitives.
 
 **Notifications** — à configurer en Phase 8 :
 email/Slack quand nouvelle CVE Critical détectée.
-
-### Pourquoi Trivy et OWASP DT ?
-
-```
-Trivy    → meilleur détection CVE Python pip (temps réel)
-OWASP DT → meilleur surveillance continue OS + alertes
-```
-
-Les deux sont complémentaires.
 
 ---
 
 ## 4. Cosign + Vault Transit — Signature des images
 
-### C'est quoi Cosign ?
-Outil de signature cryptographique des images Docker.
-Prouve qu'une image vient bien de notre pipeline et
-n'a pas été modifiée après le build.
+### Pourquoi signer les images ?
 
-### Méthode lab vs Méthode enterprise
+Sans signature :
+```
+Pipeline build image → push sur Harbor
+Quelqu'un modifie l'image sur Harbor
+Kubernetes déploie l'image modifiée ← personne ne le sait ⚠️
+```
 
-**Méthode lab** — clés générées localement, stockées
-dans GitLab comme variables secrètes. Acceptable pour
-apprendre mais pas pour la production.
+Avec signature :
+```
+Pipeline signe l'image → signature stockée sur Harbor
+Kubernetes vérifie la signature avant déploiement
+Image modifiée → signature invalide → déploiement refusé ✅
+```
 
-**Méthode enterprise (notre choix)** — Vault Transit
-garde la clé privée. Le pipeline demande à Vault de
+### Cosign seul vs Cosign + Vault
+
+**Sans Vault — clé locale** :
+```bash
+cosign generate-key-pair  # génère cosign.key + cosign.pub
+cosign sign --key cosign.key image:tag
+```
+Cosign signe directement avec sa propre clé privée.
+La clé `cosign.key` est un fichier — peut être volée.
+
+**Avec Vault Transit — méthode enterprise (notre choix)** :
+```bash
+cosign sign --key hashivault://cosign-key image:tag
+```
+Vault garde la clé privée. Cosign demande à Vault de
 signer — la clé ne quitte jamais Vault.
 
-```
-Phase 4 (lab) → Vault Transit ✅ méthode pro
-Phase 5 (AWS) → AWS KMS ✅ méthode cloud enterprise
-```
-
-### Vault Transit — concept
+### Le flux de signature complet
 
 ```
-Pipeline : "Vault, signe moi ce hash d'image"
+1. Image pushée sur Harbor
         ↓
-Vault Transit signe en interne
+2. Cosign calcule le hash de l'image
+   sha256:abc123... ← empreinte unique
+   (Cosign calcule le hash, pas Vault)
         ↓
-Vault retourne UNIQUEMENT la signature
+3. Cosign envoie le hash à Vault Transit :
+   "Signe moi sha256:abc123..."
+   (authentification avec VAULT_TOKEN)
         ↓
-Clé privée ne quitte jamais Vault ✅
+4. Vault signe le hash avec sa clé privée ECDSA-P256
+   et retourne uniquement la signature
+   La clé privée ne sort jamais de Vault ✅
+        ↓
+5. Cosign push la signature sur Harbor
+   liée à l'image
+        ↓
+6. (Phase 6) Kyverno lit cosign.pub depuis le repo
+   et vérifie la signature avant tout déploiement
 ```
 
-### Configuration Vault Transit
+### La clé publique dans le repo
 
-**1. Activer le moteur Transit**
+La clé publique `cosign.pub` est dans le repo car :
+- Kyverno en a besoin en Phase 6 pour vérifier les signatures
+- Elle est versionnée — historique des changements de clé
+- Elle n'est pas secrète — la partager est normal et recommandé
+
+```
+Clé privée  → reste dans Vault, signe ← ne sort JAMAIS
+Clé publique → dans cosign.pub, vérifie ← visible par tous
+```
+
+Ce qui est signé avec la clé privée ne peut être vérifié
+qu'avec la clé publique correspondante — cryptographie
+asymétrique. Pour l'instant personne ne vérifie encore
+les signatures — la vérification sera ajoutée en Phase 6
+avec Kyverno.
+
+### Configuration Vault Transit — étape par étape
+
+**1. Se connecter à vm-vault**
+```bash
+export VAULT_ADDR='http://192.168.157.30:8200'
+vault operator unseal  # x3 avec les unseal keys KeePass
+vault login            # avec le root token
+```
+
+**2. Activer le moteur Transit**
 ```bash
 vault secrets enable transit
 ```
+Transit = moteur cryptographique de Vault spécialisé
+dans la signature et le chiffrement sans exposer les clés.
+Différent du moteur KV utilisé pour les secrets — Transit
+ne stocke pas de données, il fait des opérations crypto.
 
-**2. Créer la clé de signature**
+**3. Créer la clé de signature**
 ```bash
 vault write -f transit/keys/cosign-key type=ecdsa-p256
 ```
+`ecdsa-p256` — algorithme de signature utilisé par Cosign.
+`exportable: false` — la clé privée ne peut jamais être
+exportée hors de Vault ✅
+`supports_signing: true` — la clé peut signer ✅
 
-`ecdsa-p256` — algorithme utilisé par Cosign.
-`exportable: false` — clé privée jamais exportable ✅
-
-**3. Créer la politique**
+**4. Créer la politique Vault**
 ```bash
 vault policy write cosign-policy - << EOF
 path "transit/sign/cosign-key" {
@@ -357,27 +471,59 @@ path "transit/keys/cosign-key" {
 EOF
 ```
 
-**`transit/sign/cosign-key/*`** — le `*` est important !
-Cosign appelle `/transit/sign/cosign-key/sha2-256` —
-sans le wildcard la politique refuse la requête.
+`transit/sign/cosign-key/*` — le wildcard `*` est
+OBLIGATOIRE. Cosign appelle le chemin avec un suffixe
+`/sha2-256` — sans le wildcard Vault refuse avec 403.
 
-**4. Créer le token**
+La politique applique le **principe du moindre privilège** :
+le pipeline ne peut que signer, pas lire les secrets
+ni gérer Vault. En entreprise les policies sont versionnées
+dans Git et appliquées via Terraform.
+
+**5. Créer le token Vault**
 ```bash
 vault token create -policy=cosign-policy -ttl=720h
 ```
+Copie le token affiché — il sera stocké dans GitLab.
+`-ttl=720h` = 30 jours. En production on utiliserait
+AppRole avec renouvellement automatique.
 
-### Clé publique dans le repo
-
-La clé publique est exportée et stockée dans `cosign.pub`
-à la racine du repo. Elle servira à Kyverno en Phase 6
-pour vérifier les signatures au déploiement Kubernetes.
-
+**6. Exporter la clé publique**
 ```bash
 vault read transit/keys/cosign-key
-# Copier le champ public_key
+```
+Copier le bloc `public_key` depuis le champ `keys` :
+```
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE/4D0IDTSrwABPRj8UD2jfHIjFTLF
+ndzCMacjK3tGM9MbnGiis06tmpD9tco8Xi6uv5udq0T6ukEdGiVYsxurMA==
+-----END PUBLIC KEY-----
 ```
 
-### Job Cosign dans .gitlab-ci.yml
+**7. Créer cosign.pub dans le repo GitLab**
+GitLab → projet → **Add file** → **Create new file**
+Nom : `cosign.pub`
+Contenu : coller la clé publique → commiter.
+
+**8. Ajouter la variable dans GitLab**
+
+GitLab → Settings → CI/CD → Variables :
+
+| Key | Value | Visibility |
+|-----|-------|------------|
+| `VAULT_SIGNING_TOKEN` | token créé à l'étape 5 | Masked and hidden |
+
+⚠️ **IMPORTANT — ne pas nommer `VAULT_TOKEN`** !
+`VAULT_TOKEN` est une variable réservée par Vault/Cosign.
+GitLab enverrait littéralement le texte `$VAULT_TOKEN`
+au lieu de la valeur — Vault retournerait 403.
+Nommer `VAULT_SIGNING_TOKEN` et l'assigner dans le job :
+```yaml
+variables:
+  VAULT_TOKEN: "$VAULT_SIGNING_TOKEN"
+```
+
+### Job Cosign dans .gitlab-ci.yml — expliqué ligne par ligne
 
 ```yaml
 sign-auth:
@@ -398,64 +544,115 @@ sign-auth:
   allow_failure: true
 ```
 
-**`hashivault://cosign-key`** — schéma reconnu par Cosign
-pour HashiCorp Vault. Juste le nom de la clé — pas le
-chemin complet.
+**`VAULT_ADDR`** — adresse de Vault sur vm-vault.
+Cosign en a besoin pour savoir où envoyer les requêtes.
 
-**`--tlog-upload=false`** — désactive Rekor transparency
-log, pas nécessaire pour notre lab.
+**`VAULT_TOKEN: "$VAULT_SIGNING_TOKEN"`** — assigne le token
+depuis la variable GitLab renommée vers la variable
+réservée que Cosign/Vault utilisent.
 
-**`COSIGN_YES=1`** — répond automatiquement aux
-confirmations interactives.
+**`apk add --no-cache curl`** — installe curl dans l'image
+Alpine. Nécessaire pour télécharger Cosign.
 
-**`--allow-insecure-registry`** — Harbor tourne en HTTP,
-Cosign refuse par défaut les registries sans HTTPS.
+**`curl -LO .../cosign-linux-amd64`** — télécharge le binaire
+Cosign depuis GitHub. Cosign n'est pas dans les packages
+Alpine donc on le télécharge manuellement.
 
-### Variables GitLab nécessaires
+**`chmod +x && mv .../cosign`** — rend Cosign exécutable
+et le place dans le PATH pour pouvoir l'appeler directement.
 
-| Key | Description | Visibility |
-|-----|-------------|------------|
-| HARBOR_USERNAME | admin | Masked and hidden |
-| HARBOR_PASSWORD | mdp Harbor | Masked and hidden |
-| DTRACK_API_KEY | token OWASP DT | Masked and hidden |
-| VAULT_SIGNING_TOKEN | token Vault cosign | Masked and hidden |
+**`docker login`** — s'authentifie à Harbor. Cosign utilise
+les credentials Docker pour accéder à l'image et pousser
+la signature sur Harbor.
+
+**`COSIGN_EXPERIMENTAL=0`** — désactive le mode expérimental
+qui nécessiterait Rekor (transparency log public) —
+pas utile dans notre lab.
+
+**`COSIGN_YES=1`** — répond automatiquement `yes` aux
+confirmations interactives. Sans ça le pipeline se bloque
+en attendant une saisie manuelle.
+
+**`--key hashivault://cosign-key`** — dit à Cosign d'utiliser
+Vault Transit. `hashivault://` est le schéma reconnu par
+Cosign pour HashiCorp Vault. Juste le nom de la clé —
+pas le chemin complet `transit/keys/cosign-key`.
+
+**`--allow-insecure-registry`** — Harbor tourne en HTTP
+dans notre lab. Cosign refuse par défaut les registries
+sans HTTPS — ce flag l'autorise.
+
+**`--tlog-upload=false`** — désactive l'upload vers Rekor,
+le transparency log public de Sigstore. Pas nécessaire
+pour notre lab privé.
 
 ---
 
-## 5. Problèmes rencontrés et solutions
+## 5. Variables GitLab — récapitulatif complet
+
+| Key | Description | Visibility |
+|-----|-------------|------------|
+| HARBOR_USERNAME | `admin` | Masked and hidden |
+| HARBOR_PASSWORD | mot de passe Harbor | Masked and hidden |
+| DTRACK_API_KEY | token OWASP DT Automation | Masked and hidden |
+| VAULT_SIGNING_TOKEN | token Vault cosign-policy | Masked and hidden |
+
+---
+
+## 6. Problèmes rencontrés et solutions
 
 ### Problème 1 — OWASP DT 401 permission denied
+**Erreur** : `Status: 401 — permission denied`
 **Cause** : token Automation sans permission PROJECT_CREATION.
 **Solution** : Ajouter `PROJECT_CREATION_UPLOAD` aux
-permissions du token dans Administration → Access Management.
+permissions dans Administration → Access Management.
 
 ### Problème 2 — Cosign schéma vault:// non reconnu
-**Cause** : Cosign n'accepte pas `vault://` mais `hashivault://`.
+**Erreur** : `unrecognized scheme: vault://`
+**Cause** : Cosign n'accepte pas `vault://`.
 **Solution** : Utiliser `hashivault://cosign-key`.
 
-### Problème 3 — Vault 403 permission denied sur sha2-256
-**Cause** : La politique n'autorisait que `transit/sign/cosign-key`
+### Problème 3 — Vault 403 sur sha2-256
+**Erreur** : `403 permission denied` sur `/transit/sign/cosign-key/sha2-256`
+**Cause** : La politique autorisait `transit/sign/cosign-key`
 mais Cosign appelle `transit/sign/cosign-key/sha2-256`.
-**Solution** : Ajouter `path "transit/sign/cosign-key/*"` avec
-wildcard dans la politique Vault.
+**Solution** : Ajouter le wildcard dans la politique :
+```hcl
+path "transit/sign/cosign-key/*" {
+  capabilities = ["update"]
+}
+```
 
 ### Problème 4 — Variable VAULT_TOKEN non résolue
-**Cause** : `VAULT_TOKEN` est une variable réservée par
-Vault/Cosign — conflit avec la variable GitLab du même nom.
-GitLab envoyait littéralement `$VAULT_TOKEN` au lieu
-de la valeur.
+**Erreur** : `403 invalid token` — Vault reçoit `$VAULT_TOKEN`
+au lieu de la valeur du token.
+**Cause** : `VAULT_TOKEN` est une variable réservée.
+Conflit avec la variable GitLab du même nom.
 **Solution** : Renommer la variable GitLab en
-`VAULT_SIGNING_TOKEN` et l'assigner à `VAULT_TOKEN`
-dans les variables du job.
-
+`VAULT_SIGNING_TOKEN` et l'assigner dans le job :
 ```yaml
 variables:
   VAULT_TOKEN: "$VAULT_SIGNING_TOKEN"
 ```
 
+### Problème 5 — Harbor 443 connection refused
+**Erreur** : `dial tcp 192.168.157.20:443: connect: connection refused`
+**Cause** : Docker essaie de se connecter à Harbor en HTTPS.
+**Solution** : Ajouter Harbor comme insecure registry
+sur vm-gitlab :
+```bash
+echo '{"insecure-registries":["192.168.157.20"]}' | sudo tee /etc/docker/daemon.json
+sudo systemctl stop docker.socket && sudo systemctl stop docker
+sudo systemctl start docker
+docker info | grep -A5 "Insecure"  # vérifier
+```
+⚠️ Le JSON doit être valide — vérifier la présence du `}` final.
+Si Docker ne prend pas en compte la config, vérifier le JSON :
+`sudo cat /etc/docker/daemon.json`
+
 ---
 
-## 6. Le .gitlab-ci.yml complet — Phase 4
+## 7. Le .gitlab-ci.yml complet — Phase 4
 
 ```yaml
 stages:
@@ -776,10 +973,13 @@ dtrack-transaction:
 
 ## Statut Phase 4
 - [x] Trivy — scan vulnérabilités dans pipeline ✅
-- [x] Syft — génération SBOM CycloneDX ✅
+- [x] Syft — génération SBOM CycloneDX (2934 composants) ✅
 - [x] OWASP DT — 3 projets avec surveillance continue ✅
 - [x] Cosign + Vault Transit — images signées ✅
+- [x] cosign.pub — clé publique dans le repo ✅
 - [x] Snapshot pipeline-phase4-complete ✅
 
 ## Prochaine étape — Phase 5
 Déploiement AWS : EKS, ECR, KMS, IAM, IRSA.
+Cosign sera reconfiguré avec AWS KMS en Phase 5.
+Kyverno vérifiera les signatures en Phase 6.
