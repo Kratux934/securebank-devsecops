@@ -1,0 +1,27 @@
+# Crée un espace isolé dans le cluster pour notre application
+# Comme un dossier qui sépare nos ressources des composants système
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: securebank
+  labels:
+    # Identifie l'application
+    app: securebank
+    # Identifie l'environnement — staging car c'est notre env local de test
+    environment: staging
+    # Qui gère ce namespace
+    team: devsecops
+```
+
+---
+
+## Pourquoi ces labels ?
+
+Les labels sont obligatoires — ils permettent de :
+```
+Filtrer les ressources :
+kubectl get all -l app=securebank
+
+Appliquer des politiques Kyverno sur un namespace précis
+Générer des rapports de coût par équipe
+Identifier rapidement ce qui tourne en cas d'incident
