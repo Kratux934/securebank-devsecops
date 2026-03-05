@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  # Nom du deployment
+  name: auth-service
+  # Dans notre namespace securebank
+  namespace: securebank
+  labels:
+    app: auth-service
+    team: devsecops
+    environment: staging
+spec:
+  # Nombre de copies du container qui tournent en parallèle
+  replicas: 1
+  # Kubernetes identifie les pods à gérer grâce à ce selector
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+        - name: auth-service
+          # Image depuis Harbor — notre registry privé
+          image: 192.168.157.20/securebank/auth-service:latest
+          # Port exposé par le container
+          ports:
+            - containerPort: 8000
+          # Ressources CPU et RAM allouées
+          # request = minimum garanti
+          # limit = maximum autorisé
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          # Vérifie que le service est vivant
+          # Si ça échoue Kubernetes redémarre le container
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            # Attend 10s avant le premier check
+            initialDelaySeconds: 10
+            # Vérifie toutes les 30s
+            periodSeconds: 30
+          # Vérifie que le service est prêt à recevoir du trafic
+          # Kubernetes n'envoie pas de trafic tant que c'est pas ready
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      # Kubernetes va chercher l'image sur Harbor
+      # qui est un registry privé — il faut s'authentifier
+      imagePullSecrets:
+        - name: harbor-secret
