@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-service-config
+  namespace: securebank
+  labels:
+    app: auth-service
+    team: devsecops
+    environment: staging
+data:
+  # Port d'écoute du service
+  PORT: "8000"
+  # Environnement — staging car on est en local
+  ENVIRONMENT: "staging"
+  # URL du service account — pour les appels inter-services
+  ACCOUNT_SERVICE_URL: "http://account-service:8001"
+  # URL du service transaction
+  TRANSACTION_SERVICE_URL: "http://transaction-service:8002"
+  # Algorithme JWT — non sensible
+  JWT_ALGORITHM: "HS256"
+  # Durée de validité du token JWT en minutes
+  ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+
+## Ce qu'on ne met PAS dans le ConfigMap
+
+##❌ JWT_SECRET        → va dans Vault → injecté par Vault Agent
+##❌ DB_PASSWORD       → va dans Vault → injecté par Vault Agent
+##❌ HARBOR_PASSWORD   → va dans Vault → injecté par Vault Agent
