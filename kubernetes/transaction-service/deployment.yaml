@@ -19,7 +19,6 @@ spec:
     spec:
       containers:
         - name: transaction-service
-          # Image depuis Harbor
           image: 192.168.157.20/securebank/transaction-service:latest
           ports:
             - containerPort: 8002
@@ -30,6 +29,24 @@ spec:
             limits:
               memory: "256Mi"
               cpu: "200m"
+          env:
+            # JWT_SECRET pour valider les tokens
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: auth-secret
+                  key: JWT_SECRET
+            # Variables communes
+            - name: ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: common-secret
+                  key: ENVIRONMENT
+            - name: JWT_ALGORITHM
+              valueFrom:
+                secretKeyRef:
+                  name: common-secret
+                  key: JWT_ALGORITHM
           livenessProbe:
             httpGet:
               path: /health
