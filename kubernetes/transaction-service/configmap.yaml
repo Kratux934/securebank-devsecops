@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: transaction-service-config
+  namespace: securebank
+  labels:
+    app: transaction-service
+    team: devsecops
+    environment: staging
+data:
+  PORT: "8002"
+  ENVIRONMENT: "staging"
+  AUTH_SERVICE_URL: "http://auth-service:8000"
+  ACCOUNT_SERVICE_URL: "http://account-service:8001"
+  JWT_ALGORITHM: "HS256"
